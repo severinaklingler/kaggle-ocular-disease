@@ -1,16 +1,10 @@
 import numpy as np
 import os
-import PIL
-import PIL.Image
 import tensorflow as tf
 import pathlib
 import pandas as pd
 import re
 import matplotlib.pyplot as plt
-
-
-import tensorflow as tf
-tf.config.run_functions_eagerly(True)
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input
 from tensorflow.keras.layers import Dense
@@ -20,18 +14,7 @@ from tensorflow.keras.layers import Conv2D
 from tensorflow.keras.layers import MaxPooling2D,MaxPooling1D
 from tensorflow.keras.utils import plot_model
 
-
-
-
-
-label_mapping = {
-    'normal fundus' : 0,
-    'normal fundus，lens dust' : 0,
-    'lens dust，normal fundus' : 0,
-    'normal fundus，normal fundus' : 0,
-    'low image quality' : 0,
-}
-
+tf.config.run_functions_eagerly(True)
 
 AUTOTUNE = tf.data.AUTOTUNE
 batch_size = 16
@@ -71,7 +54,7 @@ data_dir = pathlib.Path("./input/ocular-disease-recognition-odir5k/preprocessed_
 df = pd.read_csv('./input/ocular-disease-recognition-odir5k/full_df.csv')
 label_dict = build_label_dictionary(df)
 
-def model_b():
+def create_model():
     inp1 = Input(shape=(img_height,img_width,image_channels), name="left")
     inp2 = Input(shape=(img_height,img_width,image_channels), name="right")
     new_input = Input(shape=(img_height,img_width, image_channels), name="New Input")
@@ -93,19 +76,6 @@ def model_b():
     model = Model(inputs=[inp1,inp2], outputs=output)
     return model
 
-
-def create_dataset():
-    batch_size = 32
-    img_height = 512
-    img_width = 512
-
-    train_ds = tf.keras.utils.image_dataset_from_directory(
-    data_dir,
-    validation_split=0.2,
-    subset="training",
-    seed=123,
-    image_size=(img_height, img_width),
-    batch_size=batch_size)
 
 def _extract_label(part):
     one_hot = []
@@ -144,10 +114,6 @@ def process_path(file_path):
 
 image_filenames = list(data_dir.glob('*.jpg'))
 image_count = len(image_filenames)
-# print(image_count)
-
-# image = PIL.Image.open(str(image_filenames[0]))
-# image.show()
 
 list_ds = tf.data.Dataset.list_files(str(data_dir/'*_right.jpg'), shuffle=False)
 list_ds = list_ds.shuffle(image_count, reshuffle_each_iteration=False)
@@ -204,7 +170,7 @@ test_ds = configure_for_performance(test_ds)
 # plt.show()
 
 
-model = model_b()
+model = create_model()
 METRICS = [
     'accuracy',
     tf.keras.metrics.Precision(),
@@ -244,11 +210,3 @@ y_test = np.concatenate([y for x, y in test_ds], axis=0)
 report = classification_report(y_test, yhat,target_names=['N','D','G','C','A','H','M','O'],output_dict=True)
 df = pd.DataFrame(report).transpose()
 print(df)
-
-
-
-# print("labels")
-
-# words = df.loc[df['D'] == 1]["Left-Diagnostic Keywords"].unique()
-# words = df.loc[df['D'] == 1]["Right-Diagnostic Keywords"].unique()
-# print(words)

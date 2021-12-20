@@ -14,6 +14,8 @@ from tensorflow.keras.layers import concatenate
 from tensorflow.keras.layers import Conv2D
 from tensorflow.keras.layers import MaxPooling2D,MaxPooling1D
 from tensorflow.keras.utils import plot_model
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import classification_report
 import datetime
 
 import argparse
@@ -145,8 +147,7 @@ def create_model():
     model = Model(inputs=[inp1], outputs=output)
     return model
 
-def train_model(model, training_data, validation_data):
-    model = create_model()
+def train_model(model, training_data, validation_data, number_of_epochs):
     METRICS = [
         'accuracy',
         tf.keras.metrics.Precision(),
@@ -176,8 +177,19 @@ def train_model(model, training_data, validation_data):
     model.fit(
     training_data,
     validation_data=validation_data,
-    epochs=50,
+    epochs=number_of_epochs,
     callbacks=[tensorboard_callback])
+
+    return model
+
+def test(model, test_data):
+    yhat = model.predict(test_data)
+    yhat = yhat.round()
+    y_test = np.concatenate([y for x, y in test_data], axis=0)
+    report = classification_report(y_test, yhat,target_names=['N','D','G','C','A','H','M','O'],output_dict=True)
+    df = pd.DataFrame(report).transpose()
+    print(df)
+
 
 def load_datasets():
     global label_dict
@@ -197,7 +209,10 @@ def main():
     parser = argparse.ArgumentParser(description='Optional app description')
     parser.add_argument('--show', action='store_true', help='Visualize a training batch')
     parser.add_argument('--train', action='store_true', help='Train model')
+    parser.add_argument('--test', action='store_true', help='Test model')
     parser.add_argument('--dump', action='store_true', help='Dump data from first examples')
+    parser.add_argument('--name', type=str, help='Name of the model', default="tmpModel")
+    parser.add_argument('--epochs', type=int, help='Number of epochs to train', default=40)
     args = parser.parse_args()
 
 
@@ -210,7 +225,12 @@ def main():
         print_dataset_stats(["training_data"],[training_data],5)
 
     if args.train:
-        train_model(create_model(), training_data, validation_data)
+        trained_model = train_model(create_model(), training_data, validation_data, args.epochs)
+        trained_model.save('models/' + args.name)
+
+    if args.test:
+        model = tf.keras.models.load_model('models/' + args.name)
+        test(model, test_data)
 
 
 if __name__ == '__main__':

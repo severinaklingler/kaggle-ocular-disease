@@ -14,6 +14,9 @@ from tensorflow.keras.layers import concatenate
 from tensorflow.keras.layers import Conv2D
 from tensorflow.keras.layers import MaxPooling2D,MaxPooling1D
 from tensorflow.keras.utils import plot_model
+import datetime
+
+import argparse
 
 # Global config (TODO)
 random_seed = 77
@@ -21,13 +24,15 @@ data_path = "./input/ocular-disease-recognition-odir5k/preprocessed_images/"
 data_path_tensor = tf.constant(data_path)
 data_dir = pathlib.Path(data_path)
 AUTOTUNE = tf.data.AUTOTUNE
-batch_size = 16
+batch_size = 32
 img_height = 224
 img_width = 224
 class_count = 8
 image_channels = 3
+num_threads = 4
+label_dict = {}
 
-tf.config.run_functions_eagerly(True)
+# tf.config.run_functions_eagerly(True)
 
 
 
@@ -44,6 +49,8 @@ def load_sample_ids(df, val_size):
 
     return train_ds, val_ds, test_ds
 
+def decode_one_hot(x):
+    return next(i for i,v in enumerate(x) if v==1)
 
 def build_label_dictionary(df):
     keys = []
@@ -51,7 +58,7 @@ def build_label_dictionary(df):
     for index, row in df.iterrows():
         filename = row['filename']
         target = eval(row["target"])
-        image_target = next(i for i,v in enumerate(target) if v==1)
+        image_target = decode_one_hot(target)
         keys.append(filename)
         values.append(image_target)
 
@@ -60,24 +67,6 @@ def build_label_dictionary(df):
     table = tf.lookup.StaticHashTable(tf.lookup.KeyValueTensorInitializer(keys_tensor, vals_tensor), default_value=-1)
 
     return table
-
-def _extract_label(filename):
-    return  label_dict[bytes.decode(filename.numpy())]
-
-
-def get_label(filename):
-    [label] = tf.py_function(_extract_label, [filename], [tf.int64])
-    label.set_shape([8])
-    return label
-
-def _has_label(filename):
-    return filename in label_dict
-
-def has_label(filename):
-    [label] = tf.py_function(_has_label, [filename], [tf.bool])
-    label.set_shape([])
-    return label
-
 
 def _file_exists(file_path):
     return tf.io.gfile.exists(data_path + bytes.decode(file_path.numpy()))
@@ -119,16 +108,28 @@ def label_not_missing(data, label):
 def prepare_data(ds):
     filenames = ds.flat_map(filenames_from_id)
     existing_files = filenames.filter(file_exists)
-    existing_files_and_labels = existing_files.map(process_filename)
+    existing_files_and_labels = existing_files.map(process_filename, num_parallel_calls=num_threads)
     existing_files_and_existing_labels = existing_files_and_labels.filter(label_not_missing)
-    data_and_labels = existing_files_and_existing_labels.map(lambda x,y : (x, tf.one_hot(y,class_count)))
+    data_and_labels = existing_files_and_existing_labels.map(lambda x,y : (x, tf.one_hot(y,class_count)), num_parallel_calls=num_threads)
     return data_and_labels
 
 def configure_for_performance(ds):
   ds = ds.batch(batch_size)
-  ds = ds.prefetch(buffer_size=AUTOTUNE)
+  ds = ds.prefetch(buffer_size=1)
   return ds
 
+def show_batch(ds):
+    images_batch, label_batch = next(iter(ds))
+
+    plt.figure(figsize=(10, 10))
+    for i in range(8):
+        ax = plt.subplot(2, 4, i + 1)
+        label = label_batch[i]
+        print("Image shape: ", images_batch[i].numpy().shape)
+        print("label: ", label)
+        plt.imshow(images_batch[i].numpy().astype("uint8"))
+        plt.title(decode_one_hot(label))
+    plt.show()
 
 def create_model():
     inp1 = Input(shape=(img_height,img_width,image_channels), name="img")
@@ -169,27 +170,48 @@ def train_model(model, training_data, validation_data):
         layer_range=None,
     )
 
+    log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=10)
 
     model.fit(
     training_data,
     validation_data=validation_data,
-    epochs=50
-    )
+    epochs=50,
+    callbacks=[tensorboard_callback])
+
+def load_datasets():
+    global label_dict
+    df = pd.read_csv('./input/ocular-disease-recognition-odir5k/full_df.csv')
+    label_dict = build_label_dictionary(df)
 
 
-df = pd.read_csv('./input/ocular-disease-recognition-odir5k/full_df.csv')
-label_dict = build_label_dictionary(df)
+    train, val, test = load_sample_ids(df, 500)
+
+    training_data = configure_for_performance(prepare_data(train))
+    validation_data = configure_for_performance(prepare_data(val))
+    test_data = configure_for_performance(prepare_data(test))
+
+    return training_data, validation_data, test_data
+
+def main():
+    parser = argparse.ArgumentParser(description='Optional app description')
+    parser.add_argument('--show', action='store_true', help='Visualize a training batch')
+    parser.add_argument('--train', action='store_true', help='Train model')
+    parser.add_argument('--dump', action='store_true', help='Dump data from first examples')
+    args = parser.parse_args()
 
 
-train, val, test = load_sample_ids(df, 500)
+    training_data, validation_data, test_data = load_datasets()
 
-training_data = configure_for_performance(prepare_data(train))
-validation_data = configure_for_performance(prepare_data(val))
-test_data = configure_for_performance(prepare_data(test))
-print(training_data.element_spec)
+    if args.show:
+        show_batch(training_data)
+    
+    if args.dump:
+        print_dataset_stats(["training_data"],[training_data],5)
 
-train_model(create_model(), training_data, validation_data)
+    if args.train:
+        train_model(create_model(), training_data, validation_data)
 
 
-# print_dataset_stats(["training_data"],[training_data],5)
-
+if __name__ == '__main__':
+    main()
